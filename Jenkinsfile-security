@@ -1,0 +1,179 @@
+
+
+def version = "9.0"
+def slackResponse = null
+
+def errors = []
+def running = []
+
+def changeUrl = env.CHANGE_URL
+
+
+
+// Check vulns in dependencies on repo branches
+def failedBuild = false
+
+pipeline {
+    agent none
+    triggers { cron('@daily') }
+
+    stages {
+        stage('deps-webapp') {
+            when { not { changeRequest() } }
+            agent {
+                dockerfile {
+                    filename 'webapp/sources/Dockerfile'
+                    additionalBuildArgs "--build-arg USER_ID=${JENKINS_UID}"
+                    // and share maven cache
+                    args '-v /srv/cache/maven:/home/jenkins/.m2'
+                }
+            }
+            steps {
+                script {
+                    running.add("webapp")
+                }
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    dir('webapp/sources') {
+                        sh script: 'mvn --batch-mode -DfailBuildOnCVSS=7 -DcveValidForHours=48 -DsuppressionFiles=dependency-check-suppression.xml -DossindexAnalyzerEnabled=false org.owasp:dependency-check-maven:aggregate', label: "check webapp dependencies"
+                        sh script: 'mvn --batch-mode license:aggregate-third-party-report', label: 'list webapp dependencies'
+                    }
+                }
+            }
+            post {
+
+                always {
+                    archiveArtifacts artifacts: 'webapp/sources/target/dependency-check-report.html, webapp/sources/target/site/aggregate-third-party-report.html'
+                }
+
+                failure {
+                    script {
+                        errors.add("webapp")
+                        failedBuild = true
+                        slackResponse = updateSlack(errors, running, slackResponse, version, changeUrl)
+                        slackSend(channel: slackResponse.threadId, message: "Dependency check error on webapp - <${currentBuild.absoluteUrl}console|Console>", color: "#CC3421")
+                    }
+                }
+                cleanup {
+                    script {
+                        running.remove("webapp")
+                    }
+                }
+            }
+        }
+
+        stage('deps-npm') {
+            when { not { changeRequest() } }
+            agent {
+                dockerfile {
+                    filename 'webapp/sources/Dockerfile'
+                    additionalBuildArgs "--build-arg USER_ID=${JENKINS_UID}"
+                    // and share maven cache
+                    args '-v /srv/cache/maven:/home/jenkins/.m2'
+                }
+            }
+            steps {
+                script {
+                    running.add("npm")
+                }
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    dir('webapp/sources/rudder/rudder-web/src/main/') {
+                        sh script: 'npm_config_loglevel=error npm ci --no-audit', label: "install dependencies"
+                        sh script: 'npx better-npm-audit audit --level high', label: "check npm dependencies"
+                    }
+                }
+            }
+            post {
+                failure {
+                    script {
+                        errors.add("npm")
+                        failedBuild = true
+                        slackResponse = updateSlack(errors, running, slackResponse, version, changeUrl)
+                        slackSend(channel: slackResponse.threadId, message: "Dependency check error on npm - <${currentBuild.absoluteUrl}console|Console>", color: "#CC3421")
+                    }
+                }
+                cleanup {
+                    script {
+                        running.remove("npm")
+                    }
+                }
+            }
+        }
+        stage('deps-rust') {
+            when { not { changeRequest() } }
+            agent {
+                dockerfile {
+                    filename 'relay/sources/relayd/Dockerfile'
+                    additionalBuildArgs "--build-arg USER_ID=${JENKINS_UID}"
+                    // mount cache
+                    args '-v /srv/cache/cargo:/usr/local/cargo/registry'
+                }
+            }
+            steps {
+                script {
+                    running.add("relay")
+                }
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    sh script: 'mkdir -p target', label: 'create target directory'
+                    sh script: 'cargo deny check', label: 'check relayd dependencies'
+                    sh script: 'cargo deny list > target/rust-dependencies.txt', label: 'list rust dependencies'
+                }
+            }
+            post {
+                failure {
+                    script {
+                        errors.add("rust")
+                        failedBuild = true
+                        slackResponse = updateSlack(errors, running, slackResponse, version, changeUrl)
+                        slackSend(channel: slackResponse.threadId, message: "Dependency check error on rust projects - <${currentBuild.absoluteUrl}console|Console>", color: "#CC3421")
+                    }
+                }
+
+                cleanup {
+                    script {
+                        running.remove("rust")
+                    }
+                }
+                always {
+                    archiveArtifacts artifacts: 'target/*-dependencies.txt'
+                }
+            }
+        }
+        stage('End') {
+            steps {
+                script {
+                    updateSlack(errors, running, slackResponse, version, changeUrl)
+                    if (failedBuild) {
+                        error 'End of build'
+                    } else {
+                        echo 'End of build '
+                    }
+                }
+            }
+        }
+    }
+}
+
+def updateSlack(errors, running, slackResponse, version, changeUrl) {
+  def msg ="*${version} - rudder dependency check* - <"+currentBuild.absoluteUrl+"|Link>"
+
+  if (changeUrl == null) {
+
+      def fixed = currentBuild.resultIsBetterOrEqualTo("SUCCESS") && currentBuild.previousBuild.resultIsWorseOrEqualTo("UNSTABLE") 
+      if (errors.isEmpty() && running.isEmpty() && fixed) {
+        msg +=  " => No security issues found! :white_check_mark:"
+        def color = "good"
+        slackSend(channel: "ci-security", message: msg, color: color)
+      } 
+      
+
+      if (! errors.isEmpty()) {
+          msg += "\n*Errors* :x: ("+errors.size()+")\n  • " + errors.join("\n  • ")
+          def color = "#CC3421"
+          if (slackResponse == null) {
+            slackResponse = slackSend(channel: "ci-security", message: msg, color: color)
+          }
+          slackSend(channel: slackResponse.channelId, message: msg, timestamp: slackResponse.ts, color: color)
+      }
+      return slackResponse
+  }
+}
