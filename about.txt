@@ -1,0 +1,44 @@
+..-------------------------------------------------------..
+..        ANYFESTO - A platform from which to speak      ..
+..-------------------------------------------------------..
+
+Anyfesto is a shared information/communications platform  built on low cost hardware and free open source software. 
+- github  https://github.com/tomhiggins/anyfesto
+- website http://anyfesto.com
+- Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License
+
+
+Things needed 
+- Raspberry Pi
+- SD card
+- USB Wifi (optional)
+- US storage (optional)
+- Wall power
+- Battery pack and charger (optional)
+- Speaker (optinal)
+- Mic (optional)
+
+Tasks it can do
+- allow users to connect to it
+- serve local content
+  - wikimedia via kiwix
+  - ebooks via web server
+  - images via web server
+  - audio/video via web server
+  - programs and apps via web server
+- chat text public 
+- chat text private
+- chat voice public via mumble
+- chat voice private via mumble
+- stream audio/video to a client app (vlc, etc)
+- stream audio/video to a web browser
+- admin the streams via a client app (vlc remote)
+- admin the system via a web browser
+- broadcast FM  (working with an external FM Transmitter)
+- browse Calibre libraries
+
+Tasks it will do
+- broadcast bluetooth
+- mesh with other Anyfesto installs
+
+
